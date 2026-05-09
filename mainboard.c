@@ -60,6 +60,12 @@ unsigned int* pixels;   // holds the state of each pixel on the screen
 
 Z100* z100object;
 
+
+gboolean safe_display_idle(gpointer user_data) {
+    display();
+    return G_SOURCE_REMOVE; // Tells GTK to run this once and remove from the queue
+}
+
 void initcpmdisks(Z100* c)
 {
        FILE* cpmdisk=fopen(image_name_a,"rb");
@@ -398,7 +404,7 @@ void updateZ100Screen(Z100* c)
 		//update pixel array using current VRAM state using renderScreen() function from video.c
 		renderScreen(c->video, pixels);
 		// draw pixels to the GTK window using display() function from screen.c
-		display();
+		g_idle_add(safe_display_idle, NULL);
 	}
 }
 
@@ -789,7 +795,7 @@ void z100_port_write(unsigned int address, unsigned char data, Z100* c)
 	                printf("%c",data);
 //			videoSetChar(c->video,0,0,data);
 			videoWrite(c->video,data);
-			display();
+			g_idle_add(safe_display_idle, NULL);
 			break;
                //disk handler
                 case 0x9:
@@ -1148,9 +1154,7 @@ void onCtrlC(int c)
 	pauseS();
 //	debug_start(z100object);
 
-	struct sigaction act;
-	act.sa_handler=onCtrlC;
-	sigaction(SIGINT, &act, NULL);
+	signal(SIGINT, onCtrlC);
 
 }
 void pauseS()
@@ -1284,9 +1288,7 @@ int main(int argc, char* argv[]) {
 	initGPIO();
 
 	//contributed by porkypiggy64: this enables ctrl-c to pause the simulation
-	struct sigaction act;
-	act.sa_handler=onCtrlC;
-	sigaction(SIGINT, &act, NULL);
+	signal(SIGINT, onCtrlC);
 
 	printf("\n\n%s\n\n",
 		" ===========================================\n"
