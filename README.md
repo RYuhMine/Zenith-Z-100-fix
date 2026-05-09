@@ -12,3 +12,5 @@ As of 6/2024, the following components are working:
 - A debugger allows stepping, unassembling, breakpoints, memory/port editing, and virtual disks to be swapped at runtime
 - The emulator runs on a Raspberry Pi
 
+
+This emulator fork fixes floppy disk writing for the correct size of 368,640 bytes and track switching between drives A and B, allowing for the correct launching and installation of programs, including Windows 1.AX.
