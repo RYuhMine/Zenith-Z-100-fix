@@ -198,6 +198,8 @@ void resetJWD1797(JWD1797* jwd_controller) {
 	jwd_controller->not_master_reset = 1;
 
 	jwd_controller->current_track = 0;
+	jwd_controller->current_track_a = 0;
+	jwd_controller->current_track_b = 0;
 
 	jwd_controller->cylinders = 0; // (tracks per side)
 	jwd_controller->num_heads = 0;
@@ -380,6 +382,19 @@ void writeJWD1797(JWD1797* jwd_controller, unsigned int port_addr, unsigned int 
 		// control latch port
 		case 0xb4:
 			printf("Writing to WD1797 control port 0xB4 (ONLY wait_enabled option)\n");
+			{
+				int old_drive = jwd_controller->controlLatch & 0x3;
+				int new_drive = value & 0x3;
+				if(old_drive != new_drive) {
+					/* save current track for the drive we're leaving */
+					if(old_drive == 0) jwd_controller->current_track_a = jwd_controller->current_track;
+					else if(old_drive == 1) jwd_controller->current_track_b = jwd_controller->current_track;
+					/* restore track for the drive we're switching to */
+					if(new_drive == 0) jwd_controller->current_track = jwd_controller->current_track_a;
+					else if(new_drive == 1) jwd_controller->current_track = jwd_controller->current_track_b;
+					jwd_controller->trackRegister = jwd_controller->current_track;
+				}
+			}
 			jwd_controller->controlLatch = value;
 			// set wait enabled option according to bit 6
 			jwd_controller->wait_enabled = (jwd_controller->controlLatch >> 6) & 1;
@@ -2268,14 +2283,19 @@ void writeSector(JWD1797* w)
 	f=fopen(name,"r+b");
 	if(f==NULL)
 	{
+		/* Create a blank image with correct Z-DOS geometry:
+		   368640 bytes = 40 tracks * 2 heads * 9 sectors/track * 512 bytes */
+		int img_size = 368640;
 		f=fopen(name,"wb");
+		/* write boot sector header */
 		for(int i=0; i<512*3; i++)
 			fputc(header[i],f);
-		for(int i=0; i<327680-512*3; i++)
+		/* fill rest with zeros */
+		for(int i=512*3; i<img_size; i++)
 			fputc(0,f);
 		fclose(f);
 		f=fopen(name,"r+b");
-		printf("created image file %s\n",name);
+		printf("created image file %s (%d bytes)\n",name,img_size);
 	}
 	fseek(f,offset,SEEK_SET);
 	for(i=0; i<w->sector_length; i++)
@@ -2283,7 +2303,11 @@ void writeSector(JWD1797* w)
 	fclose(f);
 
 	printf("reloading disk %s\n",name);
-	assembleFormattedDiskArray(w, name);
+	/* Reload only the drive that was written to */
+	if((w->controlLatch&0x3)==0)
+		assembleFormattedDiskArray(w, image_name_a);
+	else
+		assembleFormattedDiskArray(w, image_name_b);
 	printf("\n\n");
 }
 

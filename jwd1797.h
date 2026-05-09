@@ -132,6 +132,8 @@ int not_master_reset; /* if this pin goes low for at least 50us, 0b00000011
   RESTORE command is executed and the sector register is set to 0b00000001 */
 
 int current_track;
+int current_track_a; /* per-drive track position for drive A */
+int current_track_b; /* per-drive track position for drive B */
 
 unsigned int cylinders; // (tracks per side)
 unsigned int num_heads; // WD1797 has two read heads, one for each side of the disk
