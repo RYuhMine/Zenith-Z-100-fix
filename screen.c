@@ -176,6 +176,9 @@ else if (event->keyval == 0xffc9) {
 }
 
 static gboolean on_draw_event(GtkWidget* widget, cairo_t *cairo_obj) {
+  if (pixels == NULL || z100 == NULL || z100->video == NULL) {
+    return FALSE;
+  }
   // holds 24-bit color from pixel array element
   unsigned int p24BitColor;
   // chars to hold each RGB color value
