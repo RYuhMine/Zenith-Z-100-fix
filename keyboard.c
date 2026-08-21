@@ -115,6 +115,20 @@ unsigned int keyboardDataRead(Keyboard* k)
 	return rval;
 }
 
+/* The arrow keys are rewritten as WordStar control codes below, which is what
+   the CP/M editors on this machine expect. Software that wants the Z-100 key
+   codes themselves, such as Microsoft Windows 1.0, then sees no arrow keys at
+   all. Set Z100_ARROW_KEYS=raw to pass 0xa5 to 0xa8 through unchanged. */
+static int rawArrowKeys(void)
+{
+	static int v = -1;
+	if (v < 0) {
+		const char* e = getenv("Z100_ARROW_KEYS");
+		v = (e && (*e == 'r' || *e == 'R')) ? 1 : 0;
+	}
+	return v;
+}
+
 void keyaction(Keyboard* k, int code)
 {
 	code=code&0xff;
@@ -132,22 +146,22 @@ void keyaction(Keyboard* k, int code)
 		k->controlPressed=0;
 	}
 // handle UP key press
-if(code == 0xa5){
+if(code == 0xa5 && !rawArrowKeys()){
 //substitute ctrl-k
 code=(char)0xb;
 }
 // handle DOWN key press
-if(code == 0xa6){
+if(code == 0xa6 && !rawArrowKeys()){
 //substitute ctrl-j
 code=(char)0xa;
 }
 // handle RIGHT key press
-if(code == 0xa7){
+if(code == 0xa7 && !rawArrowKeys()){
 //substitute ctrl-l
 code=(char)0xc;
 }
 // handle LEFT key press
-if(code == 0xa8){
+if(code == 0xa8 && !rawArrowKeys()){
 //substitute ctrl-h
 code=(char)0x8;
 }
