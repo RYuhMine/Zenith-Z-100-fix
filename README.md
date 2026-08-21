@@ -14,3 +14,22 @@ As of 6/2024, the following components are working:
 
 
 This emulator fork fixes floppy disk writing for the correct size of 368,640 bytes and track switching between drives A and B, allowing for the correct launching and installation of programs, including Windows 1.AX.
+
+
+Unattended operation
+--------------------
+
+Setting the `Z100_KEYS` environment variable to the path of a script file makes
+the emulator drive itself, which is useful for booting without a human present
+and for reproducing a bug from a fixed sequence of keystrokes. One action per
+line:
+
+    # comment
+    wait 5              wait five seconds
+    settle 3            wait until the screen has been unchanged for 3 seconds
+    text dir            type that string
+    key 0d              send a raw key code in hex, 0d is RETURN
+    disk b work.img     swap the image in drive A or B while running
+
+The file is re-read while the emulator runs, so a live session can be extended
+by appending to it.

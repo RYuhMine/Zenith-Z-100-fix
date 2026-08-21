@@ -1,6 +1,7 @@
 // This module implements the Z-100 screen using the gtk graphics library
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <gtk/gtk.h>
 #include "screen.h"
 #include "mainboard.h"
@@ -175,6 +176,158 @@ else if (event->keyval == 0xffc9) {
 	  keyaction(z100->keyboard, code);
 }
 
+
+/* -------------------------------------------------------------------------
+   Scripted keyboard, for unattended runs and regression testing.
+
+   Set the Z100_KEYS environment variable to the path of a script file and the
+   emulator will drive itself. One action per line:
+
+       # comment
+       wait 5          wait five seconds
+       settle 3        wait until the screen has been unchanged for 3 seconds
+       text dir        type that string, one key every 200 ms
+       key 0d          send a raw key code in hex (0d is RETURN)
+       disk b work.img swap the image in drive A or B while running
+
+   The file is re-read while the emulator runs, so actions can be appended to
+   a live session.
+
+   Why this exists: on a rootless X server such as WSLg there is no window
+   manager, input focus does not stick, and xdotool cannot reach the GTK key
+   handler. Without this there is no reliable way to boot the machine
+   unattended or to reproduce a bug from a fixed sequence of keystrokes.
+   -------------------------------------------------------------------------*/
+extern char* image_name_a;
+extern char* image_name_b;
+void reloadDisk(JWD1797*);
+
+enum { ACT_WAIT, ACT_TEXT, ACT_KEY, ACT_DISK, ACT_SETTLE };
+
+typedef struct { int kind; int value; char* text; } KeyAction;
+
+#define KEY_ACTIONS_MAX 4096
+#define KEY_TICK_MS     50
+#define KEY_TYPE_TICKS  4      /* one keystroke every 4 ticks, 200 ms */
+
+static KeyAction* kact = NULL;
+static int kact_n = 0, kact_i = 0, kact_ci = 0;
+static int kact_wait = 0, kact_tick = 0, kact_idle = 0;
+static unsigned int kact_sum = 0;
+static int kact_stable = 0, kact_limit = 0;
+static long kact_pos = 0;
+static char kact_path[512];
+
+static int keyScriptRead(void);
+
+/* Fingerprint of video memory, sampled one word in sixteen. Used to tell when
+   the machine has finished drawing. */
+static unsigned int vramSum(void) {
+  unsigned int s = 0;
+  const unsigned int* v = z100->video->vram;
+  for (int i = 0; i < 0x10000 * 3; i += 16) s = s * 31u + v[i];
+  return s;
+}
+
+static gboolean keyScriptStep(gpointer data) {
+  if (z100 == NULL || z100->keyboard == NULL) return TRUE;   /* still booting */
+
+  if (kact_i >= kact_n) {
+    /* Out of actions: poll the file once a second so a running session can be
+       extended by appending to it. */
+    if (++kact_idle >= 1000 / KEY_TICK_MS) { kact_idle = 0; keyScriptRead(); }
+    return TRUE;
+  }
+
+  KeyAction* a = &kact[kact_i];
+
+  if (kact_wait > 0) { kact_wait--; return TRUE; }
+
+  switch (a->kind) {
+    case ACT_WAIT:
+      kact_wait = a->value; kact_i++; return TRUE;
+
+    case ACT_SETTLE: {
+      unsigned int s = vramSum();
+      if (s == kact_sum) kact_stable++;
+      else { kact_sum = s; kact_stable = 0; }
+      kact_limit++;
+      /* The cursor blinks, so on some screens the image never becomes
+         completely stable. Give up waiting rather than stall forever. */
+      if (kact_stable >= a->value || kact_limit >= a->value * 3 + 400) {
+        kact_stable = 0; kact_limit = 0; kact_i++;
+      }
+      return TRUE;
+    }
+
+    case ACT_KEY:
+      keyaction(z100->keyboard, a->value); kact_i++; return TRUE;
+
+    case ACT_DISK: {
+      char** slot = (a->value == 0) ? &image_name_a : &image_name_b;
+      *slot = (char*)malloc(strlen(a->text) + 1);
+      strcpy(*slot, a->text);
+      reloadDisk(z100->jwd1797);
+      printf("key script: drive %c now holds %s\n", a->value ? 'B' : 'A', a->text);
+      kact_i++; return TRUE;
+    }
+
+    case ACT_TEXT:
+      if (a->text[kact_ci] == '\0') { kact_ci = 0; kact_i++; return TRUE; }
+      /* The keyboard FIFO is 17 bytes deep and keystrokes are dropped if it
+         overruns while the drive is busy, so type at a human rate. */
+      if (++kact_tick < KEY_TYPE_TICKS) return TRUE;
+      kact_tick = 0;
+      keyaction(z100->keyboard, (unsigned char)a->text[kact_ci++]);
+      return TRUE;
+  }
+  kact_i++;
+  return TRUE;
+}
+
+static void keyScriptAdd(int kind, int value, const char* text) {
+  if (kact_n >= KEY_ACTIONS_MAX) return;
+  kact[kact_n].kind = kind;
+  kact[kact_n].value = value;
+  kact[kact_n].text = text ? strdup(text) : NULL;
+  kact_n++;
+}
+
+static int keyScriptRead(void) {
+  FILE* fp = fopen(kact_path, "r");
+  if (fp == NULL) return 0;
+  fseek(fp, kact_pos, SEEK_SET);
+  int before = kact_n;
+  char line[512];
+  while (fgets(line, sizeof(line), fp) != NULL) {
+    char* p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    int n = strlen(p);
+    while (n > 0 && (p[n - 1] == '\n' || p[n - 1] == '\r')) p[--n] = '\0';
+    if (*p == '#' || *p == '\0') continue;
+    if      (!strncmp(p, "wait ", 5))   keyScriptAdd(ACT_WAIT, atoi(p + 5) * (1000 / KEY_TICK_MS), NULL);
+    else if (!strncmp(p, "settle ", 7)) keyScriptAdd(ACT_SETTLE, atoi(p + 7) * (1000 / KEY_TICK_MS), NULL);
+    else if (!strncmp(p, "key ", 4))    keyScriptAdd(ACT_KEY, (int)strtol(p + 4, NULL, 16), NULL);
+    else if (!strncmp(p, "text ", 5))   keyScriptAdd(ACT_TEXT, 0, p + 5);
+    else if (!strncmp(p, "disk ", 5))   keyScriptAdd(ACT_DISK, (p[5] == 'b' || p[5] == 'B'), p + 7);
+  }
+  kact_pos = ftell(fp);
+  fclose(fp);
+  if (kact_n > before) printf("key script: %d new action(s), %d total\n", kact_n - before, kact_n);
+  return kact_n - before;
+}
+
+static void keyScriptInit(void) {
+  const char* f = getenv("Z100_KEYS");
+  if (f == NULL) return;
+  snprintf(kact_path, sizeof(kact_path), "%s", f);
+  kact = (KeyAction*)malloc(sizeof(KeyAction) * KEY_ACTIONS_MAX);
+  if (kact == NULL) return;
+  keyScriptRead();
+  printf("key script: watching %s\n", kact_path);
+  g_timeout_add(KEY_TICK_MS, keyScriptStep, NULL);
+}
+
 static gboolean on_draw_event(GtkWidget* widget, cairo_t *cairo_obj) {
   if (pixels == NULL || z100 == NULL || z100->video == NULL) {
     return FALSE;
@@ -306,6 +459,7 @@ void screenInit(int* argc, char** argv[]) {
   g_signal_connect(G_OBJECT(window), "key-press-event", G_CALLBACK(on_keypress), NULL);
 
   gtk_widget_show_all(window);
+  keyScriptInit();
 }
 
 void screenSetComputer(Z100* c)
