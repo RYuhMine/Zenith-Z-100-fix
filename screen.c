@@ -46,7 +46,39 @@ void windowinactive()
 	gdk_window_hide(w);
 }
 
+/* X sends one key-press event per auto-repeat while a key is held down, and
+   every one of them used to reach the emulated keyboard, so typing "dir" on a
+   loaded host could arrive as "ddddddirr". Track which keys are down and drop
+   the repeats until the matching release arrives.
+   Set Z100_KEY_REPEAT=1 to restore the previous behaviour. */
+#define KEYS_DOWN_MAX 16
+static guint keysDown[KEYS_DOWN_MAX];
+static int keysDownCount = 0;
+
+static int keyRepeatAllowed(void)
+{
+  static int v = -1;
+  if (v < 0) { const char* e = getenv("Z100_KEY_REPEAT"); v = (e && *e == '1') ? 1 : 0; }
+  return v;
+}
+
+static gboolean on_keyrelease(GtkWidget* widget, GdkEventKey* event)
+{
+  for (int i = 0; i < keysDownCount; i++) {
+    if (keysDown[i] == event->keyval) {
+      keysDown[i] = keysDown[--keysDownCount];
+      break;
+    }
+  }
+  return FALSE;
+}
+
 static gboolean on_keypress(GtkWidget* widget, GdkEventKey* event) {
+  if (!keyRepeatAllowed()) {
+    for (int i = 0; i < keysDownCount; i++)
+      if (keysDown[i] == event->keyval) return TRUE;          /* auto-repeat */
+    if (keysDownCount < KEYS_DOWN_MAX) keysDown[keysDownCount++] = event->keyval;
+  }
   // the 'return' char will be used for any incoming keycode that does not
   // correspond to a standard ascii digit or letter - (set the default key code
   // to '\r')
@@ -304,6 +336,7 @@ void screenInit(int* argc, char** argv[]) {
   g_signal_connect(G_OBJECT(drawingArea), "draw", G_CALLBACK(on_draw_event), NULL);
   g_signal_connect(G_OBJECT(drawingArea), "destroy", G_CALLBACK(gtk_main_quit), NULL);
   g_signal_connect(G_OBJECT(window), "key-press-event", G_CALLBACK(on_keypress), NULL);
+  g_signal_connect(G_OBJECT(window), "key-release-event", G_CALLBACK(on_keyrelease), NULL);
 
   gtk_widget_show_all(window);
 }
