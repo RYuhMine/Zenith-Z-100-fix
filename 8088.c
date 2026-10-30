@@ -197,6 +197,7 @@ void reset8088(P8088* p8088)
 	p8088->AH=p8088->BH=p8088->CH=p8088->DH=p8088->AL=p8088->BL=p8088->CL=p8088->DL=0;
 	p8088->c=p8088->p=p8088->ac=p8088->z=p8088->s=p8088->t=p8088->i=p8088->d=p8088->o=0;
 	p8088->halt=0;
+	p8088->enable_interrupts=1;
 	p8088->name_opcode="";
 	p8088->ready_x86_=0;
 	p8088->wait_state_x86=0;
@@ -4162,6 +4163,7 @@ void doInstruction8088(P8088* p8088)
 		//sti
 		case 0xfb:
 			p8088->i=1;
+			p8088->enable_interrupts=0;
 			name_opcode="sti";
 			cycles+=2;
 			break;
