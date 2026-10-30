@@ -94,135 +94,89 @@ void windowinactive()
 	gdk_window_hide(w);
 }
 
-static gboolean on_keypress(GtkWidget* widget, GdkEventKey* event) {
-  // the 'return' char will be used for any incoming keycode that does not
-  // correspond to a standard ascii digit or letter - (set the default key code
-  // to '\r')
-  if(!z100 || !z100->keyboard) return FALSE;
-  char code = 0x00;
-  /* the GdkEventKey* event is a keyboard hardware event that is detected
-    from the user machine. What gets used here is the event->keyval instance
-    variable of the GdkEventKey object.
-    "keyval" is either one of two things - an ascii character or a keycode */
-  printf("*screen: key pressed* GdkEventKey Code: %x\n", event->keyval);
+/* Remember the identity seen on key-down: releasing Shift can change the
+   keyval reported for a held key, but its Z-100 key-up code must stay paired. */
+static unsigned int heldKeys[256];
 
-  //handle CONTROL key press
-  if(event->keyval == 0xffe3)
-  {
-    code=0x03;
-  }
+static unsigned int keyboardCode(guint keyval)
+{
+    if(keyval >= GDK_KEY_F1 && keyval <= GDK_KEY_F12) return 0x97 + keyval - GDK_KEY_F1;
+    if(keyval >= GDK_KEY_KP_0 && keyval <= GDK_KEY_KP_9) return 0xb0 + keyval - GDK_KEY_KP_0;
+    if(keyval >= 0x20 && keyval <= 0x7e) return keyval;
+    switch(keyval) {
+    case GDK_KEY_Shift_L: return KEY_SHIFT_LEFT;
+    case GDK_KEY_Shift_R: return KEY_SHIFT_RIGHT;
+    case GDK_KEY_Control_L: case GDK_KEY_Control_R: return KEY_CONTROL;
+    case GDK_KEY_Caps_Lock: return KEY_CAPS_LOCK;
+    case GDK_KEY_Alt_L: return KEY_FAST_REPEAT;
+    case GDK_KEY_Alt_R: return 0x0a;
+    case GDK_KEY_BackSpace: return 8;
+    case GDK_KEY_Tab: case GDK_KEY_ISO_Left_Tab: return 9;
+    case GDK_KEY_Return: return 13;
+    case GDK_KEY_Escape: return 0x1b;
+    case GDK_KEY_Delete: return 0x7f;
+    case GDK_KEY_KP_Enter: return 0x8d;
+    case GDK_KEY_Help: return 0x95;
+    case GDK_KEY_F13: return 0xa4;
+    case GDK_KEY_F14: return 0xa3;
+    case GDK_KEY_Up: return 0xa5;
+    case GDK_KEY_Down: return 0xa6;
+    case GDK_KEY_Right: return 0xa7;
+    case GDK_KEY_Left: return 0xa8;
+    case GDK_KEY_Home: return 0xa9;
+    case GDK_KEY_Pause: case GDK_KEY_Break: return 0xaa;
+    case GDK_KEY_KP_Subtract: return 0xad;
+    case GDK_KEY_KP_Decimal: case GDK_KEY_KP_Delete: return 0xae;
+    case GDK_KEY_KP_Insert: return 0xb0;
+    case GDK_KEY_KP_End: return 0xb1;
+    case GDK_KEY_KP_Down: return 0xb2;
+    case GDK_KEY_KP_Page_Down: return 0xb3;
+    case GDK_KEY_KP_Left: return 0xb4;
+    case GDK_KEY_KP_Begin: return 0xb5;
+    case GDK_KEY_KP_Right: return 0xb6;
+    case GDK_KEY_KP_Home: return 0xb7;
+    case GDK_KEY_KP_Up: return 0xb8;
+    case GDK_KEY_KP_Page_Up: return 0xb9;
+    }
+    return 0;
+}
 
-  // handle BACKSPACE key press
-  if(event->keyval == 0xff08) {
-    code = 0x08;
-  }
-  // handle TAB key press
-  else if(event->keyval == 0xff09) {
-    code = 0x09;
-  }
-  // handle RETURN key press
-  else if(event->keyval == 0xff0d) {
-    code = 0x0d;
-  }
-  // handle ESC key press
-  else if(event->keyval == 0xff1b) {
-    code = 0x1b;
-  }
-  // handle DEL key press
-  else if(event->keyval == 0xffff) {
-    code = 0x7f;
-  }
-  // handle ENTER (keypad) key press
-  else if(event->keyval == 0xff8d) {
-    code = (char)0x8d;
-  }
-  // F0 NOT implemented
-//F1-F12
-else if (event->keyval == 0xffbe) {
-	code=(char)0x97;
+static gboolean on_keypress(GtkWidget* widget, GdkEventKey* event)
+{
+    (void)widget;
+    if(!z100 || !z100->keyboard) return FALSE;
+    if(event->keyval == GDK_KEY_End) { togglePause(); return TRUE; }
+    unsigned int code = keyboardCode(event->keyval);
+    if(event->hardware_keycode < G_N_ELEMENTS(heldKeys)) {
+        unsigned int* held = &heldKeys[event->hardware_keycode];
+        if(!*held) *held = code;
+    }
+    if(code) keyboardKeyEvent(z100->keyboard, code, 1);
+    return code != 0;
 }
-else if (event->keyval == 0xffbf) {
-	code=(char)0x98;
+
+static gboolean on_keyrelease(GtkWidget* widget, GdkEventKey* event)
+{
+    (void)widget;
+    if(!z100 || !z100->keyboard) return FALSE;
+    unsigned int code = keyboardCode(event->keyval);
+    if(event->hardware_keycode < G_N_ELEMENTS(heldKeys)) {
+        unsigned int* held = &heldKeys[event->hardware_keycode];
+        if(*held) code = *held;
+        *held = 0;
+    }
+    if(code) keyboardKeyEvent(z100->keyboard, code, 0);
+    return code != 0;
 }
-else if (event->keyval == 0xffc0) {
-	code=(char)0x99;
-}
-else if (event->keyval == 0xffc1) {
-	code=(char)0x9a;
-}
-else if (event->keyval == 0xffc2) {
-	code=(char)0x9b;
-}
-else if (event->keyval == 0xffc3) {
-	code=(char)0x9c;
-}
-else if (event->keyval == 0xffc4) {
-	code=(char)0x9d;
-}
-else if (event->keyval == 0xffc5) {
-	code=(char)0x9e;
-}
-else if (event->keyval == 0xffc6) {
-	code=(char)0x9f;
-}
-else if (event->keyval == 0xffc7) {
-	code=(char)0xa0;
-}
-else if (event->keyval == 0xffc8) {
-	code=(char)0xa1;
-}
-else if (event->keyval == 0xffc9) {
-	code=(char)0xa2;
-}
-  // handle UP key press
-  else if(event->keyval == 0xff52) {
-    code = (char)0xa5;
-//substitute ctrl-k
-//code=(char)0xb;
-  }
-  // handle DOWN key press
-  else if(event->keyval == 0xff54) {
-    code = (char)0xa6;
-//substitute ctrl-j
-//code=(char)0xa;
-  }
-  // handle RIGHT key press
-  else if(event->keyval == 0xff53) {
-    code = (char)0xa7;
-//substitute ctrl-l
-//code=(char)0xc;
-  }
-  // handle LEFT key press
-  else if(event->keyval == 0xff51) {
-    code = (char)0xa8;
-//substitute ctrl-h
-//code=(char)0x8;
-  }
-  // handle HOME (numLock off-keypad 7 (Home)) key press
-  else if(event->keyval == 0xff95) {
-    code = (char)0xa9;
-  }
-  // handle BREAK key press
-  else if(event->keyval == 0xff13) {
-    code = (char)0xaa;
-  }
-  else if(event->keyval == 0xff57) {
-	togglePause();
-  }
-  // handle keypad '-' '.' key press
-  else if(event->keyval == 0xffad || event->keyval == 0xffae ||
-    (event->keyval >= 0xffb0 && event->keyval <= 0xffb9)) {
-    code = event->keyval & 0xFF;
-  }
-  // handle all other keys where event->keyval = z-100 keycodes
-  else if(event->keyval >= 0x20 && event->keyval <= 0x7E) {
-    code = event->keyval;
-  }
-  // call function keyaction in keyboard.c, which loads the keyboard buffer
-  // with the pressed key code
-  if(code!=0)
-	  keyaction(z100->keyboard, code);
-  return code != 0;
+
+static gboolean on_focus_out(GtkWidget* widget, GdkEventFocus* event)
+{
+    (void)widget; (void)event;
+    for(unsigned int i = 0; i < G_N_ELEMENTS(heldKeys); i++) {
+        if(heldKeys[i] && z100 && z100->keyboard) keyboardKeyEvent(z100->keyboard, heldKeys[i], 0);
+        heldKeys[i] = 0;
+    }
+    return FALSE;
 }
 
 /* Draw in physical device pixels, even on a GTK HiDPI surface. Window
@@ -285,6 +239,8 @@ void screenInit(int* argc, char** argv[])
 	g_signal_connect(drawingArea, "draw", G_CALLBACK(on_draw_event), NULL);
 	g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 	g_signal_connect(window, "key-press-event", G_CALLBACK(on_keypress), NULL);
+	g_signal_connect(window, "key-release-event", G_CALLBACK(on_keyrelease), NULL);
+	g_signal_connect(window, "focus-out-event", G_CALLBACK(on_focus_out), NULL);
 	resizePixelCanvas();
 	gtk_widget_show_all(window);
 #ifdef RPI
