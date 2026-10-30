@@ -14,3 +14,9 @@ As of 6/2024, the following components are working:
 
 
 This emulator fork fixes floppy disk writing for the correct size of 368,640 bytes and track switching between drives A and B, allowing for the correct launching and installation of programs, including Windows 1.AX.
+
+The View menu switches between point-for-point pixels (1x1) and double-height pixels (1x2, the default). Both modes use integer pixel sizes without smoothing; extra window space appears as black margins. The mode can be changed while the computer is running, without resetting it.
+
+To select the initial mode on the command line, use `./z100 --pixels=1x1 diskA.img [diskB.img]` or `./z100 --pixels=1x2 diskA.img [diskB.img]`.
+
+Keyboard input follows the ASCII or key up/down mode selected by the guest. Left Alt maps to the Z-100 Fast Repeat key (used as Alt by the Windows keyboard driver); right Alt maps to Line Feed.

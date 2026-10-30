@@ -29,7 +29,8 @@ typedef struct
 	int redcopy,greencopy,bluecopy;
 	int vramenabled;
 	int cursorh,cursorl,cursors,cursore;
-	int shift;
+	unsigned int frames;
+	int ddrA,ddrB;
 	int x,y;
 
 	int esc;
@@ -49,3 +50,7 @@ void resetVideo(Video*,unsigned int*)
 ;
 void videoSetChar(Video*,int x, int y, int code);
 void videoWrite(Video*,int);
+
+unsigned int videoMemoryAddress(const Video*, unsigned int offset);
+unsigned int videoMemoryRead(Video*, unsigned int offset);
+void videoMemoryWrite(Video*, unsigned int offset, unsigned int data);

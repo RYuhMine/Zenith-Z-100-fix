@@ -72,7 +72,8 @@ struct Z_100
 
 	//temporary to make writes to serial appear as reads
 	int serialloopback;
-	int int6set;
+	int int6set; // QVIDINT latch, cleared by parallel PA5 (CVINT)
+	unsigned char parallel_data_a, parallel_ddr_a, parallel_control_a;
 	int io_diag_port_F6;
 
 	//components:
@@ -98,7 +99,6 @@ void updateElapsedVirtualTime(Z100*);
 void simulateVSYNCInterrupt(Z100*);
 void handle8253TimerClockCycle(Z100*);
 void updateZ100Screen(Z100*);
-void interruptFunctionCall(void*, int, Z100*);
 void cascadeInterruptFunctionCall(void*, int, Z100*);
 void timer_out_0(void*, int, Z100*);
 void timer_out_1(void*, int, Z100*);

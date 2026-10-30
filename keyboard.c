@@ -15,12 +15,13 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <pthread.h>
 
 #include "mainboard.h"
 
 void scheduleTrap(int,int);
-pthread_mutex_t fifo_mutex;
+pthread_mutex_t fifo_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void doclick()
 {
@@ -39,11 +40,10 @@ void dobeep()
 
 void keyboardCommandWrite(Keyboard* k, unsigned int command)
 {
+	if(command == 0) { keyboardReset(k); return; }
+	pthread_mutex_lock(&fifo_mutex);
 	switch(command)
 	{
-		case 0x00:
-			keyboardReset(k);
-			break;
 		case 0x01:
 			k->autoRepeatOn=1;
 			break;
@@ -58,6 +58,7 @@ void keyboardCommandWrite(Keyboard* k, unsigned int command)
 			break;
 		case 0x05:
 			k->fifoHead=k->fifoTail=0;
+			k->fifoCount=0;
 			break;
 		case 0x06:
 			doclick();
@@ -79,19 +80,24 @@ void keyboardCommandWrite(Keyboard* k, unsigned int command)
 			break;
 		case 0x0c:
 			k->interruptsEnabled=1;
+			if(k->fifoCount) k->requestInterrupt=1;
 			break;
 		case 0x0d:
 			k->interruptsEnabled=0;
+			k->requestInterrupt=0;
 			break;
 	}
+	pthread_mutex_unlock(&fifo_mutex);
 }
 
 unsigned int keyboardStatusRead(Keyboard* k)
 {
 	unsigned int kpr=0;
 	unsigned int kda=0;
-	if (k->fifoHead!=k->fifoTail)
+	pthread_mutex_lock(&fifo_mutex);
+	if (k->fifoCount)
 		kda=1;
+	pthread_mutex_unlock(&fifo_mutex);
 	return (kpr<<1)|kda;
 }
 
@@ -100,7 +106,7 @@ unsigned int keyboardDataRead(Keyboard* k)
 	unsigned int rval=0;
 	pthread_mutex_lock(&fifo_mutex);
 
-	if(k->fifoHead==k->fifoTail)
+	if(!k->fifoCount)
 	{
 		rval = k->dataReg;
 		k->dataReg=0;
@@ -109,28 +115,26 @@ unsigned int keyboardDataRead(Keyboard* k)
 	{
 		rval=k->dataReg=k->fifo[k->fifoHead];
 		k->fifoHead=(k->fifoHead+1)%17;
+		k->fifoCount--;
 	}
 	pthread_mutex_unlock(&fifo_mutex);
 
 	return rval;
 }
 
+static void enqueueKey(Keyboard* k, unsigned int code)
+{
+	if(k->fifoCount == 17) return;
+	k->fifo[k->fifoTail] = code & 255;
+	k->fifoTail = (k->fifoTail + 1) % 17;
+	k->fifoCount++;
+	if(k->interruptsEnabled) k->requestInterrupt = 1;
+}
+
 void keyaction(Keyboard* k, int code)
 {
 	code=code&0xff;
 	printf("Incoming code from GdkEventKey to kb device buffer: %x\n", code);
-	if(code==0x03)
-	{
-		k->controlPressed=1;
-		printf("Control key\n");
-		return;
-	}
-	if(code==0xe1) {printf("Ignoring shift\n");return;}
-	if(k->controlPressed==1)
-	{
-		code&=0x1f;
-		k->controlPressed=0;
-	}
 // handle UP key press
 if(code == 0xa5){
 //substitute ctrl-k
@@ -153,11 +157,7 @@ code=(char)0x8;
 }
 
 	pthread_mutex_lock(&fifo_mutex);
-	k->fifo[k->fifoTail]=code;
-	k->fifoTail=(k->fifoTail+1)%17;
-
-	k->requestInterrupt=1;
-	printf("key interrupt requested\n");
+	if(k->keyboardEnabled) enqueueKey(k, code);
 	pthread_mutex_unlock(&fifo_mutex);
 }
 
@@ -174,12 +174,17 @@ Keyboard* newKeyboard()
 
 void keyboardReset(Keyboard* k)
 {
+	pthread_mutex_lock(&fifo_mutex);
 	k->autoRepeatOn=1;
 	k->keyClickOn=1;
 	k->keyboardEnabled=1;
 	k->fifoHead=k->fifoTail=0;
+	k->fifoCount=0;
+	memset(k->pressed, 0, sizeof(k->pressed));
+	k->controlPressed=0;
 	k->ASCIImode=1;
 	k->requestInterrupt=0;
+	pthread_mutex_unlock(&fifo_mutex);
 }
 
 //tables:
@@ -248,11 +253,11 @@ unsigned int keycodes[100][7]={
 	{ 0x73, 0x53, 0x13, 0x53, 1, 0x06, 0x86},
 	{ 0x74, 0x54, 0x14, 0x54, 1, 0x0b, 0x8b},
 	{ 0x75, 0x55, 0x15, 0x55, 1, 0x09, 0x89},
-	{ 0x76, 0x56, 0x16, 0x56, 1, 0x14, 0x84},
+	{ 0x76, 0x56, 0x16, 0x56, 1, 0x14, 0x94},
 	{ 0x77, 0x57, 0x17, 0x57, 1, 0x0e, 0x8e},
-	{ 0x78, 0x58, 0x18, 0x58, 1, 0x16, 0x86},
+	{ 0x78, 0x58, 0x18, 0x58, 1, 0x16, 0x96},
 	{ 0x79, 0x59, 0x19, 0x59, 1, 0x0a, 0x8a},
-	{ 0x7a, 0x5a, 0x1a, 0x5a, 1, 0x17, 0x87}, // Z
+	{ 0x7a, 0x5a, 0x1a, 0x5a, 1, 0x17, 0x97}, // Z
 
 	{ 0x08, 0x08, 0x08, 0x08, 0, 0x5f, 0xdf},	// BACKSPACE
 	{ 0x09, 0x09, 0x09, 0x09, 0, 0x4e, 0xce},	// TAB
@@ -323,3 +328,44 @@ unsigned int keycodes[100][7]={
 	{ 0x00, 0x00, 0x00, 0x00, 0, 0x64, 0xe4},	// SHIFT (left)
 	{ 0x00, 0x00, 0x00, 0x00, 0, 0x00, 0x00},	// RESET
 };
+
+int keyboardScanCode(unsigned int code)
+{
+	switch(code) {
+	case KEY_SHIFT_RIGHT: return 0x62;
+	case KEY_SHIFT_LEFT: return 0x64;
+	case KEY_CONTROL: return 0x63;
+	case KEY_CAPS_LOCK: return 0x61;
+	case KEY_FAST_REPEAT: return 0x60;
+	}
+	if(!code) return -1;
+	for(unsigned int i = 0; i < sizeof(keycodes) / sizeof(keycodes[0]); i++)
+		if(code == keycodes[i][0] || code == keycodes[i][1]) return keycodes[i][5];
+	return -1;
+}
+
+/* The host supplies both edges. ASCII mode emits characters on key-down;
+   event mode emits the physical key number and sets bit 7 on key-up. */
+void keyboardKeyEvent(Keyboard* k, unsigned int code, int pressed)
+{
+	int scan = keyboardScanCode(code);
+	if(scan < 0) return;
+	pthread_mutex_lock(&fifo_mutex);
+	int was_pressed = k->pressed[scan];
+	k->pressed[scan] = !!pressed;
+	if(k->keyboardEnabled) {
+		if(!k->ASCIImode) {
+			if(!!pressed != was_pressed) enqueueKey(k, scan | (pressed ? 0 : 0x80));
+		}
+		else if(pressed && code <= 255 && (!was_pressed || k->autoRepeatOn)) {
+			if(k->pressed[0x63] && code >= 0x40 && code <= 0x7f) code &= 0x1f;
+			// Preserve the custom CP/M terminal's existing arrow-key aliases.
+			if(code == 0xa5) code = 0x0b;
+			if(code == 0xa6) code = 0x0a;
+			if(code == 0xa7) code = 0x0c;
+			if(code == 0xa8) code = 0x08;
+			enqueueKey(k, code);
+		}
+	}
+	pthread_mutex_unlock(&fifo_mutex);
+}

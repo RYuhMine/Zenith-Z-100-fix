@@ -1,6 +1,7 @@
 // This module implements the Z-100 screen using the gtk graphics library
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <gtk/gtk.h>
 #include "screen.h"
 #include "mainboard.h"
@@ -11,22 +12,69 @@
 extern unsigned int* pixels;
 Z100* z100;
 
-//void renderScreen(Video*, unsigned int*);
-
-#ifdef RPI
-const float X_SCALE = 0.75;
-const float Y_SCALE = 1.50;
-#endif
-#ifndef RPI
-const float X_SCALE = 1;
-const float Y_SCALE = 2;
-#endif
 GtkWidget *window;
 GtkWidget *drawingArea;
+static GtkWidget *menuBar;
+static int pixelHeight = 2;
+static GMutex frameMutex;
+static unsigned int frame[VWIDTH * VHEIGHT];
+static volatile gint redrawPending;
 
-// gtk function to draw in gtk window
-void display() {
-  gtk_widget_queue_draw(window);
+int screenParseOptions(int* argc, char*** argv)
+{
+	for(int i = 1; i < *argc; i++) {
+		if(!strncmp((*argv)[i], "--pixels=", 9)) {
+			const char* value = (*argv)[i] + 9;
+			if(!strcmp(value, "1x1")) pixelHeight = 1;
+			else if(!strcmp(value, "1x2")) pixelHeight = 2;
+			else { fprintf(stderr, "Use --pixels=1x1 or --pixels=1x2\n"); return 0; }
+			for(int j = i; j < *argc; j++) (*argv)[j] = (*argv)[j + 1];
+			(*argc)--; i--;
+		}
+	}
+	return 1;
+}
+
+static gboolean queueFrame(gpointer unused)
+{
+	(void)unused;
+	g_atomic_int_set(&redrawPending, 0);
+	if(drawingArea) gtk_widget_queue_draw(drawingArea);
+	return G_SOURCE_REMOVE;
+}
+
+/* Called by the emulator thread after renderScreen. Publish a frame, then
+   ask GTK's main thread to redraw it. GTK never reads live VRAM. */
+void display()
+{
+	if(!pixels) return;
+	g_mutex_lock(&frameMutex);
+	memcpy(frame, pixels, sizeof(frame));
+	g_mutex_unlock(&frameMutex);
+	if(g_atomic_int_compare_and_exchange(&redrawPending, 0, 1))
+		g_idle_add(queueFrame, NULL);
+}
+
+static void resizePixelCanvas(void)
+{
+	int scale = gtk_widget_get_scale_factor(drawingArea);
+	if(scale < 1) scale = 1;
+	int width = (VWIDTH + scale - 1) / scale;
+	int height = (VHEIGHT * pixelHeight + scale - 1) / scale;
+	int menuHeight = 0;
+	gtk_widget_get_preferred_height(menuBar, NULL, &menuHeight);
+	gtk_widget_set_size_request(drawingArea, width, height);
+	gtk_window_resize(GTK_WINDOW(window), width, height + menuHeight);
+	gtk_window_set_title(GTK_WINDOW(window), pixelHeight == 2 ?
+		"Z-100 Screen - pixels 1x2" : "Z-100 Screen - pixels 1x1");
+	gtk_widget_queue_draw(drawingArea);
+}
+
+static void pixelModeChanged(GtkCheckMenuItem* item, gpointer height)
+{
+	if(!gtk_check_menu_item_get_active(item)) return;
+	pixelHeight = GPOINTER_TO_INT(height);
+	resizePixelCanvas();
 }
 
 void windowactive()
@@ -46,266 +94,158 @@ void windowinactive()
 	gdk_window_hide(w);
 }
 
-static gboolean on_keypress(GtkWidget* widget, GdkEventKey* event) {
-  // the 'return' char will be used for any incoming keycode that does not
-  // correspond to a standard ascii digit or letter - (set the default key code
-  // to '\r')
-  char code = 0x00;
-  /* the GdkEventKey* event is a keyboard hardware event that is detected
-    from the user machine. What gets used here is the event->keyval instance
-    variable of the GdkEventKey object.
-    "keyval" is either one of two things - an ascii character or a keycode */
-  printf("*screen: key pressed* GdkEventKey Code: %x\n", event->keyval);
+/* Remember the identity seen on key-down: releasing Shift can change the
+   keyval reported for a held key, but its Z-100 key-up code must stay paired. */
+static unsigned int heldKeys[256];
 
-  //handle CONTROL key press
-  if(event->keyval == 0xffe3)
-  {
-    code=0x03;
-  }
-
-  // handle BACKSPACE key press
-  if(event->keyval == 0xff08) {
-    code = 0x08;
-  }
-  // handle TAB key press
-  else if(event->keyval == 0xff09) {
-    code = 0x09;
-  }
-  // handle RETURN key press
-  else if(event->keyval == 0xff0d) {
-    code = 0x0d;
-  }
-  // handle ESC key press
-  else if(event->keyval == 0xff1b) {
-    code = 0x1b;
-  }
-  // handle DEL key press
-  else if(event->keyval == 0xffff) {
-    code = 0x7f;
-  }
-  // handle ENTER (keypad) key press
-  else if(event->keyval == 0xff8d) {
-    code = (char)0x8d;
-  }
-  // F0 NOT implemented
-//F1-F12
-else if (event->keyval == 0xffbe) {
-	code=(char)0x97;
-}
-else if (event->keyval == 0xffbf) {
-	code=(char)0x98;
-}
-else if (event->keyval == 0xffc0) {
-	code=(char)0x99;
-}
-else if (event->keyval == 0xffc1) {
-	code=(char)0x9a;
-}
-else if (event->keyval == 0xffc2) {
-	code=(char)0x9b;
-}
-else if (event->keyval == 0xffc3) {
-	code=(char)0x9c;
-}
-else if (event->keyval == 0xffc4) {
-	code=(char)0x9d;
-}
-else if (event->keyval == 0xffc5) {
-	code=(char)0x9e;
-}
-else if (event->keyval == 0xffc6) {
-	code=(char)0x9f;
-}
-else if (event->keyval == 0xffc7) {
-	code=(char)0xa0;
-}
-else if (event->keyval == 0xffc8) {
-	code=(char)0xa1;
-}
-else if (event->keyval == 0xffc9) {
-	code=(char)0xa2;
-}
-  // handle UP key press
-  else if(event->keyval == 0xff52) {
-    code = (char)0xa5;
-//substitute ctrl-k
-//code=(char)0xb;
-  }
-  // handle DOWN key press
-  else if(event->keyval == 0xff54) {
-    code = (char)0xa6;
-//substitute ctrl-j
-//code=(char)0xa;
-  }
-  // handle RIGHT key press
-  else if(event->keyval == 0xff53) {
-    code = (char)0xa7;
-//substitute ctrl-l
-//code=(char)0xc;
-  }
-  // handle LEFT key press
-  else if(event->keyval == 0xff51) {
-    code = (char)0xa8;
-//substitute ctrl-h
-//code=(char)0x8;
-  }
-  // handle HOME (numLock off-keypad 7 (Home)) key press
-  else if(event->keyval == 0xff95) {
-    code = (char)0xa9;
-  }
-  // handle BREAK key press
-  else if(event->keyval == 0xff13) {
-    code = (char)0xaa;
-  }
-  else if(event->keyval == 0xff57) {
-	togglePause();
-  }
-  // handle keypad '-' '.' key press
-  else if(event->keyval == 0xffad || event->keyval == 0xffae ||
-    (event->keyval >= 0xffb0 && event->keyval <= 0xffb9)) {
-    code = event->keyval & 0xFF;
-  }
-  // handle all other keys where event->keyval = z-100 keycodes
-  else if(event->keyval >= 0x20 && event->keyval <= 0x7E) {
-    code = event->keyval;
-  }
-  // call function keyaction in keyboard.c, which loads the keyboard buffer
-  // with the pressed key code
-  if(code!=0)
-	  keyaction(z100->keyboard, code);
+static unsigned int keyboardCode(guint keyval)
+{
+    if(keyval >= GDK_KEY_F1 && keyval <= GDK_KEY_F12) return 0x97 + keyval - GDK_KEY_F1;
+    if(keyval >= GDK_KEY_KP_0 && keyval <= GDK_KEY_KP_9) return 0xb0 + keyval - GDK_KEY_KP_0;
+    if(keyval >= 0x20 && keyval <= 0x7e) return keyval;
+    switch(keyval) {
+    case GDK_KEY_Shift_L: return KEY_SHIFT_LEFT;
+    case GDK_KEY_Shift_R: return KEY_SHIFT_RIGHT;
+    case GDK_KEY_Control_L: case GDK_KEY_Control_R: return KEY_CONTROL;
+    case GDK_KEY_Caps_Lock: return KEY_CAPS_LOCK;
+    case GDK_KEY_Alt_L: return KEY_FAST_REPEAT;
+    case GDK_KEY_Alt_R: return 0x0a;
+    case GDK_KEY_BackSpace: return 8;
+    case GDK_KEY_Tab: case GDK_KEY_ISO_Left_Tab: return 9;
+    case GDK_KEY_Return: return 13;
+    case GDK_KEY_Escape: return 0x1b;
+    case GDK_KEY_Delete: return 0x7f;
+    case GDK_KEY_KP_Enter: return 0x8d;
+    case GDK_KEY_Help: return 0x95;
+    case GDK_KEY_F13: return 0xa4;
+    case GDK_KEY_F14: return 0xa3;
+    case GDK_KEY_Up: return 0xa5;
+    case GDK_KEY_Down: return 0xa6;
+    case GDK_KEY_Right: return 0xa7;
+    case GDK_KEY_Left: return 0xa8;
+    case GDK_KEY_Home: return 0xa9;
+    case GDK_KEY_Pause: case GDK_KEY_Break: return 0xaa;
+    case GDK_KEY_KP_Subtract: return 0xad;
+    case GDK_KEY_KP_Decimal: case GDK_KEY_KP_Delete: return 0xae;
+    case GDK_KEY_KP_Insert: return 0xb0;
+    case GDK_KEY_KP_End: return 0xb1;
+    case GDK_KEY_KP_Down: return 0xb2;
+    case GDK_KEY_KP_Page_Down: return 0xb3;
+    case GDK_KEY_KP_Left: return 0xb4;
+    case GDK_KEY_KP_Begin: return 0xb5;
+    case GDK_KEY_KP_Right: return 0xb6;
+    case GDK_KEY_KP_Home: return 0xb7;
+    case GDK_KEY_KP_Up: return 0xb8;
+    case GDK_KEY_KP_Page_Up: return 0xb9;
+    }
+    return 0;
 }
 
-static gboolean on_draw_event(GtkWidget* widget, cairo_t *cairo_obj) {
-  if (pixels == NULL || z100 == NULL || z100->video == NULL) {
+static gboolean on_keypress(GtkWidget* widget, GdkEventKey* event)
+{
+    (void)widget;
+    if(!z100 || !z100->keyboard) return FALSE;
+    if(event->keyval == GDK_KEY_End) { togglePause(); return TRUE; }
+    unsigned int code = keyboardCode(event->keyval);
+    if(event->hardware_keycode < G_N_ELEMENTS(heldKeys)) {
+        unsigned int* held = &heldKeys[event->hardware_keycode];
+        if(!*held) *held = code;
+    }
+    if(code) keyboardKeyEvent(z100->keyboard, code, 1);
+    return code != 0;
+}
+
+static gboolean on_keyrelease(GtkWidget* widget, GdkEventKey* event)
+{
+    (void)widget;
+    if(!z100 || !z100->keyboard) return FALSE;
+    unsigned int code = keyboardCode(event->keyval);
+    if(event->hardware_keycode < G_N_ELEMENTS(heldKeys)) {
+        unsigned int* held = &heldKeys[event->hardware_keycode];
+        if(*held) code = *held;
+        *held = 0;
+    }
+    if(code) keyboardKeyEvent(z100->keyboard, code, 0);
+    return code != 0;
+}
+
+static gboolean on_focus_out(GtkWidget* widget, GdkEventFocus* event)
+{
+    (void)widget; (void)event;
+    for(unsigned int i = 0; i < G_N_ELEMENTS(heldKeys); i++) {
+        if(heldKeys[i] && z100 && z100->keyboard) keyboardKeyEvent(z100->keyboard, heldKeys[i], 0);
+        heldKeys[i] = 0;
+    }
     return FALSE;
-  }
-  // holds 24-bit color from pixel array element
-  unsigned int p24BitColor;
-  // chars to hold each RGB color value
-  unsigned char red_val;
-  unsigned char green_val;
-  unsigned char blue_val;
-  /* populate the pixel array using the render screen function defined in video.c.
-    This function reads the VRAM and sets up the pixel array accordingly */
-  renderScreen(z100->video,pixels);
-  // now, cycle through the pixel array as if reading rows/columns
-  // loop through rows
+}
 
-if(X_SCALE!=(int)X_SCALE || Y_SCALE!=(int)Y_SCALE)
+/* Draw in physical device pixels, even on a GTK HiDPI surface. Window
+   resizing adds margins; it never applies fractional scaling to the image. */
+static void paintPixels(cairo_t* cr, int width, int height, int yscale, unsigned int* data)
 {
-//https://stackoverflow.com/questions/9570895/image-downscaling-algorithm
-int xwidth=(int)(X_SCALE*640);
-int ywidth=(int)(Y_SCALE*225);
-double yend=0.0;
-
-  for(int row = 0; row < ywidth; row++) {
-	double ystart=yend;
-	yend=(row+1)/Y_SCALE;
-	if(yend>=225)
-		yend=225-.0001;
-	double xend=0.0;
-
-    // loop through columns
-    for(int column = 0; column < xwidth; column++) {
-	double xstart=xend;
-	xend=(column+1)/X_SCALE;
-	if(xend>=640)
-		xend=640-.0001;
-	double ravg=0.0,gavg=0.0,bavg=0.0;
-	for(int y=(int)ystart; y<=(int)yend; ++y)
-	{
-		double yportion=1.0;
-		if(y==(int)ystart)
-			yportion-=ystart-y;
-		if(y==(int)yend)
-			yportion-=y+1-yend;
-		for(int x=(int)xstart; x<=(int)xend; ++x)
-		{
-			double xportion=1.0;
-			if(x==(int)xstart) xportion-=xstart-x;
-			if(x==(int)xend) xportion-=x+1-xend;
-
-      // get 24-bit colour from pixel array element
-      p24BitColor = pixels[(y*640) + x];
-      // extract each color component from the 24-bit color
-      red_val = (p24BitColor>>16)&0xff;
-      green_val = (p24BitColor>>8)&0xff;
-      blue_val = p24BitColor&0xff;
-	ravg+=red_val*yportion*xportion;
-	gavg+=green_val*yportion*xportion;
-	bavg+=blue_val*yportion*xportion;
-		}
-	}
-	ravg=ravg/(X_SCALE*Y_SCALE);
-	gavg=gavg/(X_SCALE*Y_SCALE);
-	bavg=bavg/(X_SCALE*Y_SCALE);
-	if(ravg>=256.0)ravg=255.0;
-	if(gavg>=256.0){gavg=255.0; printf("Oops g=%f\n",gavg); }
-	if(bavg>=256.0)bavg=255.0;
-	red_val=(int)ravg;
-	green_val=(int)gavg;
-	blue_val=(int)bavg;
-      // source RGB data to cairo rectangle
-      cairo_set_source_rgb(cairo_obj, red_val, green_val, blue_val);
-      // make rectangle (obj, x-coor of left side, y-coor of top, width, height)
-      cairo_rectangle(cairo_obj, column, row, 1, 1);
-      // color rectangle
-      cairo_fill(cairo_obj);
-    }
-  }
+	double deviceX = 1, deviceY = 1;
+	cairo_surface_get_device_scale(cairo_get_target(cr), &deviceX, &deviceY);
+	cairo_save(cr);
+	cairo_set_source_rgb(cr, 0, 0, 0);
+	cairo_paint(cr);
+	cairo_scale(cr, 1.0 / deviceX, 1.0 / deviceY);
+	int x = ((int)(width * deviceX) - VWIDTH) / 2;
+	int y = ((int)(height * deviceY) - VHEIGHT * yscale) / 2;
+	if(x < 0) x = 0;
+	if(y < 0) y = 0;
+	cairo_translate(cr, x, y);
+	cairo_scale(cr, 1, yscale);
+	cairo_surface_t* image = cairo_image_surface_create_for_data((unsigned char*)data,
+		CAIRO_FORMAT_RGB24, VWIDTH, VHEIGHT, VWIDTH * sizeof(*data));
+	cairo_set_source_surface(cr, image, 0, 0);
+	cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+	cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
+	cairo_rectangle(cr, 0, 0, VWIDTH, VHEIGHT);
+	cairo_fill(cr);
+	cairo_surface_destroy(image);
+	cairo_restore(cr);
 }
-else
+
+static gboolean on_draw_event(GtkWidget* widget, cairo_t* cr)
 {
-
-  for(int row = 0; row < 225; row++) {
-    // loop through columns
-    for(int column = 0; column < 640; column++) {
-      // get 24-bit colour from pixel array element
-      p24BitColor = pixels[(row*640) + column];
-      // extract each color component from the 24-bit color
-      red_val = (p24BitColor>>16)&0xff;
-      green_val = (p24BitColor>>8)&0xff;
-      blue_val = p24BitColor&0xff;
-      // source RGB data to cairo rectangle
-      cairo_set_source_rgb(cairo_obj, red_val, green_val, blue_val);
-      // make rectangle (obj, x-coor of left side, y-coor of top, width, height)
-      int xsize=(int)X_SCALE;
-      if (xsize<1) xsize=1;
-      int ysize=(int)Y_SCALE;
-      if (ysize<1) ysize=1;
-      cairo_rectangle(cairo_obj, (int)(column*X_SCALE), (int)(row*Y_SCALE), xsize, ysize);
-      // color rectangle
-      cairo_fill(cairo_obj);
-    }
-  }
-}
-  return FALSE;
+	g_mutex_lock(&frameMutex);
+	paintPixels(cr, gtk_widget_get_allocated_width(widget),
+		gtk_widget_get_allocated_height(widget), pixelHeight, frame);
+	g_mutex_unlock(&frameMutex);
+	return FALSE;
 }
 
-void screenInit(int* argc, char** argv[]) {
-
-  gtk_init(argc, argv);
-
-  window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  drawingArea = gtk_drawing_area_new();
-  // add drawing area to window
-  gtk_container_add(GTK_CONTAINER(window), drawingArea);
-
-  gtk_window_set_title(GTK_WINDOW(window), "Z-100 Screen");
-  gtk_window_set_default_size(GTK_WINDOW(window), (int)(640*X_SCALE), (int)(225*Y_SCALE));
-
+void screenInit(int* argc, char** argv[])
+{
+	gtk_init(argc, argv);
+	window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+	drawingArea = gtk_drawing_area_new();
+	GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_container_add(GTK_CONTAINER(window), box);
+	menuBar = gtk_menu_bar_new();
+	GtkWidget* view = gtk_menu_item_new_with_label("View");
+	GtkWidget* menu = gtk_menu_new();
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(view), menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menuBar), view);
+	GtkWidget* square = gtk_radio_menu_item_new_with_label(NULL, "Pixels 1x1 (point for point)");
+	GtkWidget* tall = gtk_radio_menu_item_new_with_label_from_widget(GTK_RADIO_MENU_ITEM(square), "Pixels 1x2 (double height)");
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu), square);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu), tall);
+	gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(pixelHeight == 2 ? tall : square), TRUE);
+	gtk_box_pack_start(GTK_BOX(box), menuBar, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(box), drawingArea, TRUE, TRUE, 0);
+	g_signal_connect(square, "toggled", G_CALLBACK(pixelModeChanged), GINT_TO_POINTER(1));
+	g_signal_connect(tall, "toggled", G_CALLBACK(pixelModeChanged), GINT_TO_POINTER(2));
+	g_signal_connect(drawingArea, "draw", G_CALLBACK(on_draw_event), NULL);
+	g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+	g_signal_connect(window, "key-press-event", G_CALLBACK(on_keypress), NULL);
+	g_signal_connect(window, "key-release-event", G_CALLBACK(on_keyrelease), NULL);
+	g_signal_connect(window, "focus-out-event", G_CALLBACK(on_focus_out), NULL);
+	resizePixelCanvas();
+	gtk_widget_show_all(window);
 #ifdef RPI
-  gtk_window_fullscreen(GTK_WINDOW(window));
+	gtk_window_fullscreen(GTK_WINDOW(window));
 #endif
-
-  // connect callback functions to GTK window and drawing area default operations
-  /* i.e. - when gtk_widget_queue_draw() is called via the display() function called
-    from the main Z-100 loop in mainBoard.c, it qualifies as a "draw" event */
-  g_signal_connect(G_OBJECT(drawingArea), "draw", G_CALLBACK(on_draw_event), NULL);
-  g_signal_connect(G_OBJECT(drawingArea), "destroy", G_CALLBACK(gtk_main_quit), NULL);
-  g_signal_connect(G_OBJECT(window), "key-press-event", G_CALLBACK(on_keypress), NULL);
-
-  gtk_widget_show_all(window);
 }
 
 void screenSetComputer(Z100* c)

@@ -4,3 +4,5 @@ void display();
 void screenInit(int* argc, char** argv[]);
 void screenLoop();
 void screenSetComputer(Z100*);
+
+int screenParseOptions(int* argc, char*** argv);

@@ -18,6 +18,8 @@ typedef struct
 	unsigned int dataReg;
 	int fifoHead;
 	int fifoTail;
+	int fifoCount;
+	unsigned char pressed[128];
 
 	int autoRepeatOn;
 	int keyClickOn;
@@ -48,5 +50,8 @@ void dobeep();
 
 //from UI
 void keyaction(Keyboard*,int code);
+enum { KEY_SHIFT_RIGHT = 0x100, KEY_SHIFT_LEFT, KEY_CONTROL, KEY_CAPS_LOCK, KEY_FAST_REPEAT };
+int keyboardScanCode(unsigned int code);
+void keyboardKeyEvent(Keyboard*, unsigned int code, int pressed);
 void keydown(char* name);
 void keyup(char* name);
